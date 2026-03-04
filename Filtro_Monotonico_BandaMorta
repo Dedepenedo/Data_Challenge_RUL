@@ -1,0 +1,117 @@
+import pandas as pd
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(14, 7))
+
+caminho_base = r"C:\Users\Usuario\Desktop\João Alberto\IHHA_2025-main\LabTDF\Train"
+trens_selecionados = [1, 2, 3, 15, 18, 22, 27, 35, 46] # Pode adicionar mais trens aqui
+
+nomes_colunas = [
+    "Duration", "Ref_Pos", "Fbk_Pos", "Ref_Vel", "Fbk_Vel", 
+    "Fbk_Hall", "Fbk_Enc", "Vbus", "Temp_Motor", 
+    "Corrente_A", "Corrente_B", "Corrente_C", 
+    "Temp_Driver", "Volt_A", "Volt_B", "Volt_C"
+]
+
+# ==============================================================================
+# FUNÇÃO: Filtro Monotônico Robusto com "Banda Morta" (Tolerância)
+# ==============================================================================
+def filtro_monotonico_tolerante(sinal, tolerancia=1.0):
+    """
+    Mantém o sinal no patamar atual. Só permite que o sinal caia se a queda
+    for MAIOR ou IGUAL a 'tolerancia' informada (agora 1.0 grau). 
+    """
+    resultado = np.zeros(len(sinal))
+    patamar_atual = sinal.iloc[0]
+    
+    for i in range(len(sinal)):
+        queda = patamar_atual - sinal.iloc[i]
+        
+        # Só atualiza o patamar se a queda for significativa
+        if queda >= tolerancia:
+            patamar_atual = sinal.iloc[i]
+            
+        resultado[i] = patamar_atual
+        
+    return pd.Series(resultado, index=sinal.index)
+# ==============================================================================
+
+trens_plotados = 0
+
+print(f"Aplicando Filtro Monotônico (Banda Morta = 1.0°) para os trens: {trens_selecionados}")
+
+for caso in trens_selecionados:
+    caminho_pasta = f"{caminho_base}\\Train_{caso}\\"
+    arquivo_rul = f"{caminho_pasta}F_{caso}_RUL.csv"
+    
+    if not os.path.exists(arquivo_rul):
+        continue
+        
+    try:
+        with open(arquivo_rul, 'r') as f:
+            nCiclos = int(f.readline().strip())
+    except:
+        continue
+        
+    ciclos = []
+    x_atual_vals = []
+    
+    for i in range(1, nCiclos + 1):
+        file_open = f"{caminho_pasta}F_{caso}_{i:05d}_Opening.csv"
+        if os.path.exists(file_open):
+            try:
+                df_open = pd.read_csv(file_open, sep=';', header=None, names=nomes_colunas, usecols=['Fbk_Pos'], nrows=1)
+                ciclos.append(i)
+                x_atual_vals.append(df_open['Fbk_Pos'].iloc[0])
+            except:
+                pass 
+                
+    if len(ciclos) > 0:
+        ciclos = np.array(ciclos)
+        sinal_bruto = pd.Series(x_atual_vals)
+        
+        # 1. Mediana inicial (tira ruídos rápidos)
+        sinal_suavizado = sinal_bruto.rolling(window=5, min_periods=1, center=True).median()
+        
+        # 2. Envelope Superior (pega os melhores fechamentos da janela)
+        envelope_superior = sinal_suavizado.rolling(window=10, min_periods=1).max()
+        
+        # 3. FILTRO MONOTÔNICO TOLERANTE (Agora com tolerancia=1.0)
+        sinal_monotonico = filtro_monotonico_tolerante(envelope_superior, tolerancia=1.0)
+        
+        patamar_inicial = sinal_monotonico.iloc[0]
+        degradacao_y = patamar_inicial - sinal_monotonico
+        
+        # FDI: Onde a porta perdeu 1.0 grau de forma oficial (alinhado com a banda morta)
+        limiar_fdi = 1.0
+        idx_fdi_array = np.where(degradacao_y >= limiar_fdi)[0]
+        
+        if len(idx_fdi_array) > 0:
+            idx_fdi = idx_fdi_array[0]
+            ciclo_fdi = ciclos[idx_fdi]
+        else:
+            ciclo_fdi = ciclos[-1]
+            
+        ciclos_relativos = ciclos - ciclo_fdi
+        
+        plt.plot(ciclos_relativos, degradacao_y, linewidth=2.5, alpha=0.9, label=f'Train_{caso}')
+        trens_plotados += 1
+
+print(f"\nGráfico gerado com sucesso para {trens_plotados} trens!")
+
+# ==================== ESTILIZAÇÃO ====================
+if trens_plotados > 0:
+    plt.axvline(x=0, color='black', linestyle='-', linewidth=2, alpha=0.8, label='FDI Exato (Degrau ≥ 1.0°)')
+    plt.axhline(y=171, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Limite EoL (~171°)')
+
+    plt.title('Curvas de Degradação Ultraconservadoras (Banda Morta de 1.0°)\nIgnora danos menores que 1 grau. Início perfeitamente reto.', fontsize=15, fontweight='bold')
+    plt.xlabel('Ciclos Relativos (0 = Momento exato do FDI)', fontsize=12)
+    plt.ylabel('Graus de Degradação Acumulada', fontsize=12)
+    
+    plt.xlim(left=-200)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(loc='upper left', fontsize=11)
+    plt.tight_layout()
+    plt.show()
