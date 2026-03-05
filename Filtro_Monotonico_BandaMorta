@@ -3,10 +3,12 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 
-plt.figure(figsize=(14, 7))
+plt.figure(figsize=(16, 20))
 
 caminho_base = r"C:\Users\Usuario\Desktop\João Alberto\IHHA_2025-main\LabTDF\Train"
-trens_selecionados = [1, 2, 3, 15, 18, 22, 27, 35, 46] # Pode adicionar mais trens aqui
+
+# Selecionamos os trens da sua primeira imagem
+trens_selecionados = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48] 
 
 nomes_colunas = [
     "Duration", "Ref_Pos", "Fbk_Pos", "Ref_Vel", "Fbk_Vel", 
@@ -15,45 +17,34 @@ nomes_colunas = [
     "Temp_Driver", "Volt_A", "Volt_B", "Volt_C"
 ]
 
-# ==============================================================================
-# FUNÇÃO: Filtro Monotônico Robusto com "Banda Morta" (Tolerância)
-# ==============================================================================
-def filtro_monotonico_tolerante(sinal, tolerancia=1.0):
-    """
-    Mantém o sinal no patamar atual. Só permite que o sinal caia se a queda
-    for MAIOR ou IGUAL a 'tolerancia' informada (agora 1.0 grau). 
-    """
+def filtro_monotonico_tolerante(sinal, tolerancia):
     resultado = np.zeros(len(sinal))
     patamar_atual = sinal.iloc[0]
-    
     for i in range(len(sinal)):
         queda = patamar_atual - sinal.iloc[i]
-        
-        # Só atualiza o patamar se a queda for significativa
         if queda >= tolerancia:
             patamar_atual = sinal.iloc[i]
-            
         resultado[i] = patamar_atual
-        
     return pd.Series(resultado, index=sinal.index)
+
+print(f"Lendo dados e calculando a Curva Mediana para {len(trens_selecionados)} trens...")
+
+dados_trens = {}
+max_ciclo_global = 0
+
 # ==============================================================================
-
-trens_plotados = 0
-
-print(f"Aplicando Filtro Monotônico (Banda Morta = 1.0°) para os trens: {trens_selecionados}")
-
+# ETAPA 1: EXTRAÇÃO E FILTRAGEM INDIVIDUAL
+# ==============================================================================
 for caso in trens_selecionados:
     caminho_pasta = f"{caminho_base}\\Train_{caso}\\"
     arquivo_rul = f"{caminho_pasta}F_{caso}_RUL.csv"
     
-    if not os.path.exists(arquivo_rul):
-        continue
+    if not os.path.exists(arquivo_rul): continue
         
     try:
         with open(arquivo_rul, 'r') as f:
             nCiclos = int(f.readline().strip())
-    except:
-        continue
+    except: continue
         
     ciclos = []
     x_atual_vals = []
@@ -65,53 +56,92 @@ for caso in trens_selecionados:
                 df_open = pd.read_csv(file_open, sep=';', header=None, names=nomes_colunas, usecols=['Fbk_Pos'], nrows=1)
                 ciclos.append(i)
                 x_atual_vals.append(df_open['Fbk_Pos'].iloc[0])
-            except:
-                pass 
+            except: pass 
                 
     if len(ciclos) > 0:
         ciclos = np.array(ciclos)
         sinal_bruto = pd.Series(x_atual_vals)
         
-        # 1. Mediana inicial (tira ruídos rápidos)
+        janela_saudavel = sinal_bruto.head(30)
+        ruido_std = janela_saudavel.std() if len(janela_saudavel) > 1 else 0
+        banda_morta_dinamica = max(0.2, 3 * ruido_std)
+        
         sinal_suavizado = sinal_bruto.rolling(window=5, min_periods=1, center=True).median()
-        
-        # 2. Envelope Superior (pega os melhores fechamentos da janela)
         envelope_superior = sinal_suavizado.rolling(window=10, min_periods=1).max()
-        
-        # 3. FILTRO MONOTÔNICO TOLERANTE (Agora com tolerancia=1.0)
-        sinal_monotonico = filtro_monotonico_tolerante(envelope_superior, tolerancia=1.0)
+        sinal_monotonico = filtro_monotonico_tolerante(envelope_superior, tolerancia=banda_morta_dinamica)
         
         patamar_inicial = sinal_monotonico.iloc[0]
         degradacao_y = patamar_inicial - sinal_monotonico
         
-        # FDI: Onde a porta perdeu 1.0 grau de forma oficial (alinhado com a banda morta)
-        limiar_fdi = 1.0
+        limiar_fdi = banda_morta_dinamica
         idx_fdi_array = np.where(degradacao_y >= limiar_fdi)[0]
         
         if len(idx_fdi_array) > 0:
-            idx_fdi = idx_fdi_array[0]
-            ciclo_fdi = ciclos[idx_fdi]
+            ciclo_fdi = ciclos[idx_fdi_array[0]]
         else:
             ciclo_fdi = ciclos[-1]
             
         ciclos_relativos = ciclos - ciclo_fdi
         
-        plt.plot(ciclos_relativos, degradacao_y, linewidth=2.5, alpha=0.9, label=f'Train_{caso}')
-        trens_plotados += 1
+        mask_pos = ciclos_relativos >= 0
+        if np.any(mask_pos):
+            x_pos = ciclos_relativos[mask_pos]
+            y_pos = degradacao_y.values[mask_pos]
+            dados_trens[caso] = (x_pos, y_pos)
+            
+            if x_pos.max() > max_ciclo_global:
+                max_ciclo_global = x_pos.max()
+                
+        # >>> MUDANÇA AQUI: Adicionado o label para cada trem individual <<<
+        label_trem = f'Train_{caso} (Tol: {banda_morta_dinamica:.2f}°)'
+        plt.plot(ciclos_relativos, degradacao_y, linewidth=2.0, alpha=0.8, label=label_trem)
 
-print(f"\nGráfico gerado com sucesso para {trens_plotados} trens!")
+# ==============================================================================
+# ETAPA 2: CRIAÇÃO DA CURVA MEDIANA
+# ==============================================================================
+x_grid = np.linspace(0, max_ciclo_global, num=1000)
+matriz_y_interpolado = []
+
+for caso, (x_pos, y_pos) in dados_trens.items():
+    y_interp = np.interp(x_grid, x_pos, y_pos, right=y_pos[-1])
+    matriz_y_interpolado.append(y_interp)
+
+matriz_y_interpolado = np.array(matriz_y_interpolado)
+curva_mediana = np.median(matriz_y_interpolado, axis=0)
+
+# ==============================================================================
+# ETAPA 3: DEFINIÇÃO DAS REGIÕES E PLOTAGEM DOS ENVELOPES
+# ==============================================================================
+tolerancia_distancia = 25.0 
+
+limite_proximo_acima = curva_mediana + tolerancia_distancia
+limite_proximo_abaixo = np.maximum(0, curva_mediana - tolerancia_distancia)
+
+plt.fill_between(x_grid, limite_proximo_abaixo, curva_mediana, color='green', alpha=0.15, label='Região: Próximo & Abaixo (Verde)')
+plt.fill_between(x_grid, curva_mediana, limite_proximo_acima, color='orange', alpha=0.15, label='Região: Próximo & Acima (Laranja)')
+plt.fill_between(x_grid, 0, limite_proximo_abaixo, color='blue', alpha=0.08, label='Região: Distante & Abaixo (Azul)')
+plt.fill_between(x_grid, limite_proximo_acima, 190, color='red', alpha=0.08, label='Região: Distante & Acima (Vermelho)')
+
+plt.plot(x_grid, curva_mediana, color='black', linewidth=4, linestyle='-', label='CURVA MEDIANA DA FROTA')
 
 # ==================== ESTILIZAÇÃO ====================
-if trens_plotados > 0:
-    plt.axvline(x=0, color='black', linestyle='-', linewidth=2, alpha=0.8, label='FDI Exato (Degrau ≥ 1.0°)')
-    plt.axhline(y=171, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Limite EoL (~171°)')
+plt.axvline(x=0, color='black', linestyle='--', linewidth=2, alpha=0.8)
+plt.axhline(y=171, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Limite EoL (~171°)')
 
-    plt.title('Curvas de Degradação Ultraconservadoras (Banda Morta de 1.0°)\nIgnora danos menores que 1 grau. Início perfeitamente reto.', fontsize=15, fontweight='bold')
-    plt.xlabel('Ciclos Relativos (0 = Momento exato do FDI)', fontsize=12)
-    plt.ylabel('Graus de Degradação Acumulada', fontsize=12)
-    
-    plt.xlim(left=-200)
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend(loc='upper left', fontsize=11)
-    plt.tight_layout()
-    plt.show()
+plt.title('Classificação de Comportamento por Distância da Mediana (Envelopes)', fontsize=16, fontweight='bold')
+plt.xlabel('Ciclos Relativos (0 = FDI)', fontsize=12)
+plt.ylabel('Graus de Degradação Acumulada', fontsize=12)
+
+plt.xlim(left=-100, right=max_ciclo_global)
+plt.ylim(bottom=-5, top=185)
+
+plt.grid(True, linestyle='--', alpha=0.5)
+
+# A legenda agora foi configurada para ficar do lado de fora à direita, em duas colunas,
+# para acomodar perfeitamente os nomes dos trens e as regiões sem poluir o gráfico.
+handles, labels = plt.gca().get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+plt.legend(by_label.values(), by_label.keys(), loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=10, ncol=1, borderaxespad=0.)
+
+plt.tight_layout()
+plt.show()
