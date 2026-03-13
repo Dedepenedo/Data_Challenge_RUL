@@ -1,0 +1,21 @@
+import pandas as pd
+
+# 1. Carrega o dataset bruto
+df_raw = pd.read_csv('dataset_bruto_frota.csv')
+
+# 2. Define as nossas listas oficiais e blindadas
+lista_treino = [2, 4, 5, 6, 8, 10, 11, 14, 15, 16, 18, 19, 22, 23, 24, 26, 29, 30, 31, 32, 33, 34, 35, 36, 39, 41, 42, 43, 44, 45]
+lista_val    = [1, 12, 13, 20, 21, 27, 28, 46, 48]
+lista_teste  = [3, 7, 9, 17, 25, 37, 38, 40, 47]
+
+# 3. Cria os 3 DataFrames usando a função .isin() do Pandas
+# Usamos o .copy() no final para garantir que eles sejam arquivos independentes na memória
+df_treino = df_raw[df_raw['ID_Trem'].isin(lista_treino)].copy()
+df_val    = df_raw[df_raw['ID_Trem'].isin(lista_val)].copy()
+df_teste  = df_raw[df_raw['ID_Trem'].isin(lista_teste)].copy()
+
+# 4. Imprime o tamanho de cada um
+print(f"Grupo de Treino:    {len(df_treino):,} linhas".replace(',', '.'))
+print(f"Grupo de Validação: {len(df_val):,} linhas".replace(',', '.'))
+print(f"Grupo de Teste:     {len(df_teste):,} linhas".replace(',', '.'))
+print(f"Total da Frota:     {len(df_raw):,} linhas".replace(',', '.'))

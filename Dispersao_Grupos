@@ -1,0 +1,152 @@
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import os
+import webbrowser
+
+# ==============================================================================
+# 1. FUNÇÃO: Filtro Monotônico STEP-BY-STEP
+# ==============================================================================
+def filtro_monotonico_step_by_step(sinal, banda_morta_series):
+    resultado = np.zeros(len(sinal))
+    patamar_atual = sinal.iloc[0]
+    
+    for i in range(len(sinal)):
+        queda = patamar_atual - sinal.iloc[i]
+        tolerancia_atual = banda_morta_series.iloc[i] 
+        if queda >= tolerancia_atual:
+            patamar_atual = sinal.iloc[i]
+        resultado[i] = patamar_atual
+        
+    return pd.Series(resultado, index=sinal.index)
+
+# ==============================================================================
+# 2. CARREGAMENTO DOS DADOS E AS NOVAS LISTAS BLINDADAS
+# ==============================================================================
+print("Carregando o Dataset Bruto na memória...")
+df_raw = pd.read_csv('dataset_bruto_frota.csv')
+
+# AS SUAS NOVAS LISTAS (Com a Âncora do Trem 6 no Treino)
+lista_treino = [2, 4, 5, 6, 8, 10, 11, 14, 15, 16, 18, 19, 22, 23, 24, 26, 29, 30, 31, 32, 33, 34, 35, 36, 39, 41, 42, 43, 44, 45]
+lista_val    = [1, 12, 13, 20, 21, 27, 28, 46, 48]
+lista_teste  = [3, 7, 9, 17, 25, 37, 38, 40, 47]
+
+# Dicionários de Cores
+cores_transp = {'Treino': 'rgba(31, 119, 180, 0.3)', 'Validação': 'rgba(255, 127, 14, 0.4)', 'Teste': 'rgba(44, 160, 44, 0.4)'}
+cores_solida = {'Treino': 'rgb(31, 119, 180)',       'Validação': 'rgb(255, 127, 14)',       'Teste': 'rgb(44, 160, 44)'}
+
+# Criando as DUAS figuras separadas
+fig_curvas = go.Figure()
+fig_gaussiana = go.Figure()
+
+trens = df_raw['ID_Trem'].unique()
+vidas_uteis = {'Treino': [], 'Validação': [], 'Teste': []}
+
+print("Calculando degradação dinâmica e montando distribuições...")
+
+# ==============================================================================
+# 3. PROCESSAMENTO MATEMÁTICO E GRÁFICO 1 (CURVAS)
+# ==============================================================================
+for trem in trens:
+    df_trem = df_raw[df_raw['ID_Trem'] == trem].copy()
+    if df_trem.empty: continue
+        
+    sinal_bruto = df_trem['Fbk_Pos'].reset_index(drop=True)
+    ciclos = df_trem['Ciclo'].reset_index(drop=True).values
+    
+    # Registra a vida útil máxima para usar no Gráfico 2
+    vida_maxima = ciclos[-1]
+    
+    if trem in lista_treino: grupo = 'Treino'
+    elif trem in lista_val: grupo = 'Validação'
+    else: grupo = 'Teste'
+    
+    vidas_uteis[grupo].append(vida_maxima)
+    
+    # Filtro Dinâmico (Banda Morta 0.5 a 10.0)
+    ruido_rolante = sinal_bruto.rolling(window=30, min_periods=2).std().bfill()
+    banda_morta_step = np.clip(3 * ruido_rolante, a_min=0.5, a_max=10.0)
+    
+    sinal_suavizado = sinal_bruto.rolling(window=5, min_periods=1, center=True).median()
+    envelope_superior = sinal_suavizado.rolling(window=10, min_periods=1).max()
+    sinal_monotonico = filtro_monotonico_step_by_step(envelope_superior, banda_morta_step)
+    
+    patamar_inicial = sinal_monotonico.iloc[0]
+    degradacao_y = patamar_inicial - sinal_monotonico
+    
+    idx_fdi_array = np.where(degradacao_y >= banda_morta_step)[0]
+    ciclo_fdi = ciclos[idx_fdi_array[0]] if len(idx_fdi_array) > 0 else ciclos[-1]
+    ciclos_relativos = ciclos - ciclo_fdi
+    
+    # Adicionando a linha ao Gráfico de Curvas
+    fig_curvas.add_trace(go.Scatter(
+        x=ciclos_relativos, y=degradacao_y, mode='lines',
+        name=f'Train_{trem:02d}', legendgroup=grupo,
+        legendgrouptitle_text=f"<b>{grupo}</b>",
+        line=dict(color=cores_transp[grupo], width=2.5 if grupo != 'Treino' else 1.5)
+    ))
+
+# ==============================================================================
+# 4. PROCESSAMENTO E GRÁFICO 2 (GAUSSIANA)
+# ==============================================================================
+def calcular_pdf_gaussiana(x, mu, sigma):
+    return (1.0 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+
+x_gauss = np.linspace(0, 4500, 500)
+
+for grupo in ['Treino', 'Validação', 'Teste']:
+    dados_vida = np.array(vidas_uteis[grupo])
+    mu = np.mean(dados_vida)
+    sigma = np.std(dados_vida)
+    
+    y_gauss = calcular_pdf_gaussiana(x_gauss, mu, sigma)
+    
+    # Linha da Gaussiana
+    fig_gaussiana.add_trace(go.Scatter(
+        x=x_gauss, y=y_gauss, mode='lines',
+        name=f'{grupo} (Média: {mu:.0f} | σ: {sigma:.0f})',
+        legendgroup=grupo, 
+        line=dict(color=cores_solida[grupo], width=3)
+    ))
+    
+    # Preenchimento
+    fig_gaussiana.add_trace(go.Scatter(
+        x=x_gauss, y=y_gauss, mode='lines',
+        fill='tozeroy', fillcolor=cores_transp[grupo],
+        line=dict(color='rgba(255,255,255,0)'),
+        legendgroup=grupo, showlegend=False, hoverinfo='skip'
+    ))
+
+# ==============================================================================
+# 5. ESTILIZAÇÃO FINAL E ABERTURA NAS ABAS
+# ==============================================================================
+# Layout da Figura 1 (Curvas)
+fig_curvas.add_vline(x=0, line_dash="solid", line_color="black", line_width=2, annotation_text="FDI Adaptativo")
+fig_curvas.add_hline(y=171, line_dash="dash", line_color="red", line_width=2, annotation_text="Limite EoL (~171°)")
+fig_curvas.update_layout(
+    title='<b>1. Dispersão das Curvas de Degradação (Split Corrigido)</b>',
+    xaxis_title='Ciclos Relativos (0 = Detecção da Falha - FDI)', yaxis_title='Graus de Degradação Acumulada',
+    template='plotly_white', hovermode='closest', height=800,
+    legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01, borderwidth=1)
+)
+
+# Layout da Figura 2 (Gaussiana)
+fig_gaussiana.update_layout(
+    title='<b>2. Distribuição Gaussiana de Vida Útil (Split Corrigido)</b>',
+    xaxis_title='Ciclos Totais de Vida Útil (RUL Máximo)', yaxis_title='Densidade de Probabilidade',
+    template='plotly_white', hovermode='x unified', height=800,
+    legend=dict(yanchor="top", y=0.99, xanchor="left", x=1.01, borderwidth=1)
+)
+
+# Salvando os arquivos independentes
+arq_curvas = "grafico_1_curvas_atualizado.html"
+arq_gauss = "grafico_2_gaussiana_atualizado.html"
+
+fig_curvas.write_html(arq_curvas)
+fig_gaussiana.write_html(arq_gauss)
+
+print(f"\nSucesso! Abrindo as duas abas no seu navegador...")
+
+# Abrindo ambos no navegador
+webbrowser.open('file://' + os.path.realpath(arq_curvas))
+webbrowser.open('file://' + os.path.realpath(arq_gauss))

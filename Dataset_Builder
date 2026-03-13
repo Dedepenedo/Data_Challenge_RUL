@@ -1,0 +1,85 @@
+import pandas as pd
+import numpy as np
+import os
+
+# ==============================================================================
+# CONFIGURAÇÕES DA CAMADA RAW
+# ==============================================================================
+caminho_base = r"C:\Users\Usuario\Desktop\João Alberto\IHHA_2025-main\LabTDF\Train"
+trens_selecionados = list(range(1, 49)) 
+
+nomes_colunas = [
+    "Duration", "Ref_Pos", "Fbk_Pos", "Ref_Vel", "Fbk_Vel", 
+    "Fbk_Hall", "Fbk_Enc", "Vbus", "Temp_Motor", 
+    "Corrente_A", "Corrente_B", "Corrente_C", 
+    "Temp_Driver", "Volt_A", "Volt_B", "Volt_C"
+]
+
+print("Iniciando a varredura e extração bruta dos arquivos físicos...")
+lista_dataframes = []
+
+for caso in trens_selecionados:
+    caminho_pasta = f"{caminho_base}\\Train_{caso}\\"
+    arquivo_rul = f"{caminho_pasta}F_{caso}_RUL.csv"
+    
+    if not os.path.exists(arquivo_rul):
+        print(f"-> Train_{caso} ignorado (pasta não encontrada).")
+        continue
+        
+    # Lendo o RUL corrigido (pulando o arquivo de fechamento)
+    try:
+        df_rul = pd.read_csv(arquivo_rul, header=None, names=['RUL_Alvo']).iloc[::2].reset_index(drop=True)
+        nCiclos = len(df_rul) 
+    except Exception as e:
+        print(f"Erro ao ler RUL do Train_{caso}: {e}")
+        continue
+        
+    ciclos_lidos = []
+    linhas_brutas = []
+    
+    # Extraindo as 16 variáveis da primeira linha de cada ciclo de abertura
+    for i in range(1, nCiclos + 1):
+        file_open = f"{caminho_pasta}F_{caso}_{i:05d}_Opening.csv"
+        if os.path.exists(file_open):
+            try:
+                # Lemos a primeira linha de todas as 16 colunas
+                df_linha = pd.read_csv(file_open, sep=';', header=None, names=nomes_colunas, nrows=1)
+                linhas_brutas.append(df_linha.iloc[0].values)
+                ciclos_lidos.append(i)
+            except:
+                pass 
+                
+    if len(ciclos_lidos) > 0:
+        # Montando a tabela bruta deste trem
+        df_trem = pd.DataFrame(linhas_brutas, columns=nomes_colunas)
+        df_trem.insert(0, 'ID_Trem', caso)
+        df_trem.insert(1, 'Ciclo', ciclos_lidos)
+        
+        # Alinhando o RUL
+        indices_rul = np.array(ciclos_lidos) - 1 
+        df_trem['RUL_Alvo'] = df_rul['RUL_Alvo'].iloc[indices_rul].values
+        
+        lista_dataframes.append(df_trem)
+        print(f"Train_{caso:02d} | Extraído com sucesso: {len(df_trem)} ciclos com 16 variáveis.")
+
+# ==============================================================================
+# CONSOLIDAÇÃO E SALVAMENTO
+# ==============================================================================
+if lista_dataframes:
+    tabela_raw = pd.concat(lista_dataframes, ignore_index=True)
+    
+    # Opcional: Transformar Fbk_Pos em "Degradação Bruta" calculando a diferença
+    # para a média das primeiras 10 viagens de cada trem, se quiser facilitar depois.
+    # Mas como você quer DADOS PUROS, deixaremos exatamente como o sensor enviou.
+    
+    nome_arquivo = 'dataset_bruto_frota.csv'
+    tabela_raw.to_csv(nome_arquivo, index=False)
+    
+    print("\n" + "="*60)
+    print(" EXTRAÇÃO CONCLUÍDA! CAMADA RAW CRIADA.")
+    print(f" Arquivo: {nome_arquivo}")
+    print(f" Total de registros: {len(tabela_raw)} linhas.")
+    print(f" Variáveis disponíveis: {tabela_raw.shape[1]} colunas.")
+    print("="*60)
+else:
+    print("Nenhum dado encontrado.")

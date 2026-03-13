@@ -1,0 +1,86 @@
+import pandas as pd
+import numpy as np
+
+# ==============================================================================
+# 1. FUNÇÃO: Filtro Monotônico
+# ==============================================================================
+def filtro_monotonico_step_by_step(sinal, banda_morta_series):
+    resultado = np.zeros(len(sinal))
+    patamar_atual = sinal.iloc[0]
+    
+    for i in range(len(sinal)):
+        queda = patamar_atual - sinal.iloc[i]
+        tolerancia_atual = banda_morta_series.iloc[i] 
+        if queda >= tolerancia_atual:
+            patamar_atual = sinal.iloc[i]
+        resultado[i] = patamar_atual
+        
+    return pd.Series(resultado, index=sinal.index)
+
+# ==============================================================================
+# 2. CARREGAMENTO E CONFIGURAÇÃO
+# ==============================================================================
+print("Lendo a base bruta para recriar as features...")
+df_raw = pd.read_csv('dataset_bruto_frota.csv')
+
+# Listas blindadas contra extrapolação
+lista_treino = [2, 4, 5, 6, 8, 10, 11, 14, 15, 16, 18, 19, 22, 23, 24, 26, 29, 30, 31, 32, 33, 34, 35, 36, 39, 41, 42, 43, 44, 45]
+lista_val    = [1, 12, 13, 20, 21, 27, 28, 46, 48]
+lista_teste  = [3, 7, 9, 17, 25, 37, 38, 40, 47]
+
+lista_dataframes_features = []
+trens = df_raw['ID_Trem'].unique()
+
+print("Processando matemática de Velocidade e Vibração...")
+
+# ==============================================================================
+# 3. EXTRAÇÃO DE FEATURES
+# ==============================================================================
+for trem in trens:
+    df_trem = df_raw[df_raw['ID_Trem'] == trem].copy()
+    if df_trem.empty: continue
+        
+    sinal_bruto = df_trem['Fbk_Pos'].reset_index(drop=True)
+    ciclos = df_trem['Ciclo'].reset_index(drop=True).values
+    
+    # Filtro Dinâmico
+    ruido_rolante = sinal_bruto.rolling(window=30, min_periods=2).std().bfill()
+    banda_morta_step = np.clip(3 * ruido_rolante, a_min=0.5, a_max=10.0)
+    
+    sinal_suavizado = sinal_bruto.rolling(window=5, min_periods=1, center=True).median()
+    envelope_superior = sinal_suavizado.rolling(window=10, min_periods=1).max()
+    sinal_monotonico = filtro_monotonico_step_by_step(envelope_superior, banda_morta_step)
+    
+    patamar_inicial = sinal_monotonico.iloc[0]
+    degradacao_y = patamar_inicial - sinal_monotonico
+    
+    # Criando as Features
+    df_features = pd.DataFrame()
+    df_features['ID_Trem'] = df_trem['ID_Trem']
+    df_features['Ciclo'] = df_trem['Ciclo']
+    
+    df_features['Degradacao_Atual'] = degradacao_y.values
+    df_features['Velocidade_Desgaste'] = df_features['Degradacao_Atual'].diff(periods=10).fillna(0)
+    df_features['Vibracao_Posicao'] = sinal_bruto.rolling(window=10, min_periods=1).std().fillna(0).values
+    df_features['RUL_Alvo'] = df_trem['RUL_Alvo']
+    
+    if trem in lista_treino: grupo = 'Treino'
+    elif trem in lista_val: grupo = 'Validação'
+    else: grupo = 'Teste'
+    df_features['Grupo'] = grupo
+    
+    # Cortando dados antes da falha (FDI)
+    idx_fdi_array = np.where(degradacao_y >= banda_morta_step)[0]
+    if len(idx_fdi_array) > 0:
+        idx_fdi = idx_fdi_array[0]
+        df_features = df_features.iloc[idx_fdi:].copy()
+        
+    lista_dataframes_features.append(df_features)
+
+# ==============================================================================
+# 4. SALVAMENTO
+# ==============================================================================
+tabela_final = pd.concat(lista_dataframes_features, ignore_index=True).dropna()
+tabela_final.to_csv('dataset_features_ml.csv', index=False)
+
+print("\nPronto! O arquivo 'dataset_features_ml.csv' foi recriado com sucesso na sua pasta.")
