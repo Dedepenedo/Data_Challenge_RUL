@@ -1,0 +1,2 @@
+- Tabela_por_viagem.ipynb -> plota uma tabela a partir de 5 ciclos antes do First Detection Point (FDP) de uma viagem selecionada, onde cada linha equivale a um ciclo e cada coluna é uma feature dessa linha (RUL, corrente, tensão, etc)
+- Visualizando_RUL.ipynb -> plota a tabela com as curvas de degradação de cada Train, todas sendo formatadas para o ponto 0 ser no FDP de cada uma
