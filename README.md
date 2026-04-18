@@ -5,3 +5,4 @@ main.ipynb = código organizado para fazer várias funções. Contém nele funç
 - Score.py
 - Submission_format.py
 - Random_Forest.py
+- Comparacao.py
