@@ -3,28 +3,21 @@ import pandas as pd
 import numpy as np
 import pickle
 
-# Repare que não temos mais nenhum import do tsfresh aqui!
-def executar_extracao():
-    todas_as_portas = [] # Lista mestre para guardar os DataFrames de todas as portas já processadas
+def executar_extracao(tipo_pasta, num_portas):
+    todas_as_portas = []
+    nomes_colunas = [ "Duration", "Ref_Pos", "Fbk_Pos", "Ref_Vel", "Fbk_Vel", "Fbk_Hall", "Fbk_Enc", "Vbus", "Temp_Motor", "Corrente_A", "Corrente_B", "Corrente_C", "Temp_Driver", "Volt_A", "Volt_B", "Volt_C"]
 
-    nomes_colunas = [ # Todas as colunas de acordo com o pdf
-        "Duration", "Ref_Pos", "Fbk_Pos", "Ref_Vel", "Fbk_Vel", 
-        "Fbk_Hall", "Fbk_Enc", "Vbus", "Temp_Motor", 
-        "Corrente_A", "Corrente_B", "Corrente_C", 
-        "Temp_Driver", "Volt_A", "Volt_B", "Volt_C"
-    ]
-
-    for i in range(1, 49): # Loop para os 48 Train's
-        print(f"Analisando o Train_{i}...")  
-        caminho_pasta = f"Train/Train_{i}/"
-        arquivo_rul = f"{caminho_pasta}F_{i}_RUL.csv"
+    for i in range(1, num_portas + 1):
+        print(f"Analisando {tipo_pasta}_{i}...")
+        caminho_pasta = f"{tipo_pasta}/{tipo_pasta}_{i}/"
         
-        try:
-            with open(arquivo_rul, 'r') as f:
-                linha = f.readline()
-                nCiclos = int(linha.strip())
-        except FileNotFoundError:
-            print(f"Erro: Arquivo RUL não encontrado na porta {i}")
+        # 1. Nova forma de descobrir os ciclos (funciona sem o arquivo RUL!)
+        nCiclos = 0
+        while os.path.exists(f"{caminho_pasta}F_{i}_{nCiclos+1:05d}_Opening.csv"):
+            nCiclos += 1
+            
+        if nCiclos == 0:
+            print(f"Aviso: Nenhum dado encontrado na porta {i}")
             continue
 
         dados_processados = []
@@ -106,17 +99,29 @@ def executar_extracao():
             
             df_porta_filtrada = df_porta[(df_porta['Ciclo_Relativo'] >= -5)]
             todas_as_portas.append((i, df_porta_filtrada))
+            
+        
+        return todas_as_portas
 
-    # ========================================================
-    # EXPORTAÇÃO DOS DADOS TURBINADOS PARA DISCO
-    # ========================================================
-    pasta_destino = "Dados_Processados"
-    if not os.path.exists(pasta_destino):
-        os.makedirs(pasta_destino)
+    
+      
+# ========================================================
+# EXECUÇÃO DUPLA E SALVAMENTO
+# ========================================================
+print("=== EXTRAINDO DADOS DE TREINO ===")
+portas_treino = executar_extracao("Train", 48)
 
-    caminho_completo = os.path.join(pasta_destino, "df_features.pkl")
+print("\n=== EXTRAINDO DADOS DE TESTE ===")
+portas_teste = executar_extracao("Test", 19)
 
-    with open(caminho_completo, 'wb') as arquivo_pkl:
-        pickle.dump(todas_as_portas, arquivo_pkl)
+pasta_destino = "Dados_Processados"
+if not os.path.exists(pasta_destino): os.makedirs(pasta_destino)
 
-    print(f"\n✅ Extração concluída! {len(todas_as_portas)} trens salvos com as novas features elétricas em: {caminho_completo}")
+# Salva dois arquivos separados e limpos!
+with open(os.path.join(pasta_destino, "treino_features.pkl"), 'wb') as f:
+    pickle.dump(portas_treino, f)
+    
+with open(os.path.join(pasta_destino, "teste_features.pkl"), 'wb') as f:
+    pickle.dump(portas_teste, f)
+    
+print("\n✅ Extração dupla concluída!")
